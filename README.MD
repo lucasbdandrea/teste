@@ -255,6 +255,31 @@ cross_gt = (cross_seen_te.join(cross_seen_tr, on=['userId', 'itemId'], how='left
 
 ---
 
+### Regras de Negócio (Hardcoded)
+
+**Arquivo:** `MatrixFactorization/6.Predict.py`
+
+O pós-processamento aplica filtros de negócio implementados em código. Estas regras garantem conformidade com políticas comerciais e regulatórias:
+
+**Negativação de Posse:**
+- Remove recomendações de produtos que o cliente já possui (flag = 1 na tabela de perfil)
+- Aplica anti-join com tabela diarizada para excluir produtos contratados recentemente (vlr_transacao >= 1)
+
+**Regras de Cartão de Crédito:**
+- **Hierarquia de Upgrade:** Só recomenda categoria superior à atual (STANDARD < GOLD < PLATINUM < BLACK)
+- **Deduplicação:** Limita a 1 variante de cartão por cliente (mantém maior score × maior rank)
+- **SOW_CARTAO:** Apenas para clientes que já possuem cartão de crédito (PROD_CARTAO_CREDITO = 1)
+
+**Regras de Investimentos (Jornada Progressiva):**
+- **Produto Base:** Se já possui RENDA_FIXA, não recomenda novamente
+- **Produtos Avançados:** Se NÃO possui RENDA_FIXA, bloqueia LCA, LCI e DEPOSITO_A_PRAZO
+
+**Normalização de Score:**
+- Min-Max por cliente e tipo de oferta (cross-sell / up-sell)
+- Se apenas 1 produto disponível, score normalizado = 1.0
+
+---
+
 ### Métricas de Avaliação
 
 O sistema utiliza **métricas de ranking** específicas para sistemas de recomendação:
@@ -271,37 +296,6 @@ O sistema utiliza **métricas de ranking** específicas para sistemas de recomen
 ```python
 composite_score = (0.5 × NDCG) + (0.3 × MAP) + (0.2 × Hit Rate)
 ```
-
----
-
-## Grid Search de Hiperparâmetros
-
-### Cross-Sell (Feedback Implícito)
-
-**Objetivo:** Recomendar produtos que o cliente ainda não possui
-
-```python
-# Grid de hiperparâmetros
-RANK_CS_LIST = [5, 25]           # Dimensão dos fatores latentes
-REG_CS_LIST = [0.01, 0.05, 0.1]  # Regularização L2
-ALPHA_CS_LIST = [1]               # Peso do feedback implícito
-MAXIT_CS_LIST = [12]              # Iterações máximas
-```
-
-**Transformação:** Binária (0/1) - Cliente tem ou não o produto
-
-### Up-Sell (Feedback Explícito)
-
-**Objetivo:** Recomendar aumento de volume em produtos que o cliente já possui
-
-```python
-# Grid de hiperparâmetros
-RANK_UP_LIST = [5, 10]
-REG_UP_LIST = [0.01, 0.05, 0.1]
-MAXIT_UP_LIST = [12]
-```
-
-**Transformação:** `log1p(valor)` - Volume de transação logaritmizado
 
 ---
 
@@ -414,9 +408,11 @@ cluster_mapping = {
 **Arquivo:** `MatrixFactorization/2.Treino_MT.py`  
 **Localização:** Linhas 44-53
 
-Para expandir ou reduzir o espaço de busca de hiperparâmetros do ALS, edite as seguintes listas:
+O sistema executa dois Grid Search independentes (Cross-Sell e Up-Sell) por cluster. Para expandir ou reduzir o espaço de busca de hiperparâmetros do ALS, edite as seguintes listas:
 
-**Cross-Sell (Feedback Implícito):**
+**a) Cross-Sell (Feedback Implícito)**
+
+**Objetivo:** Recomendar produtos que o cliente ainda não possui.
 
 ```python
 # Grid para Cross-Sell
@@ -426,19 +422,26 @@ ALPHA_CS_LIST = [1]               # Peso do feedback implícito
 MAXIT_CS_LIST = [12]              # Iterações máximas
 ```
 
-**Up-Sell (Feedback Explícito):**
+**Transformação:** Binária (0/1) - Cliente tem ou não o produto
+
+**b) Up-Sell (Feedback Explícito)**
+
+**Objetivo:** Recomendar aumento de volume em produtos que o cliente já possui.
 
 ```python
 # Grid para Up-Sell
-RANK_UP_LIST = [5, 10]
-REG_UP_LIST = [0.01, 0.05, 0.1]
-MAXIT_UP_LIST = [12]
+RANK_UP_LIST = [5, 10]           # Dimensão dos fatores latentes
+REG_UP_LIST = [0.01, 0.05, 0.1]  # Regularização L2
+MAXIT_UP_LIST = [12]              # Iterações máximas
 ```
 
-**Recomendações:**
-- Adicionar valores maiores em `RANK_LIST` melhora a capacidade de representação, mas aumenta o risco de overfitting.
-- Aumentar `REG_LIST` penaliza mais a complexidade do modelo (útil para dados esparsos).
-- O número total de cenários testados é o produto cartesiano das listas.
+**Transformação:** `log1p(valor)` - Volume de transação logaritmizado para reduzir impacto de outliers
+
+**Recomendações Técnicas:**
+- Adicionar valores maiores em `RANK_LIST` aumenta a capacidade de representação, mas eleva o risco de overfitting
+- Aumentar `REG_LIST` penaliza mais a complexidade do modelo (útil para dados esparsos)
+- O número total de cenários testados é o produto cartesiano das listas (ex: 3 × 3 × 1 × 1 = 9 cenários para Cross-Sell)
+- Grid Search pode levar 2-4 horas por cluster dependendo do volume de dados
 
 ---
 
@@ -590,6 +593,69 @@ Para alterar a pontuação de um produto para valor fixo:
 
 ---
 
+### 6. Migração de Tabela (Segmentação)
+
+**Arquivo:** `Clusterizacao/1.Extração_Segmentacão.py`  
+**Localização:** Linhas 98-122
+
+**Contexto:** A tabela `sicredi_cas.exp_plan_fin_e_bi.tb_assoc_novo_segmento_2026` será descontinuada. Atualmente, fazemos um join com essa tabela legada apenas para buscar a coluna `SUBSEGMENTO_NOVO`, que é renomeada para `PORTE_PADRAO`.
+
+**Código Atual (Legado):**
+
+```python
+# Tabela legada (será descontinuada)
+df_nova_segmentacao_filtrado = (
+    dfs["nova_segmentacao"]
+    .filter(F.col("NUM_ANO_MES") == config_tabelas["nova_segmentacao"]["mes_ref"])
+    .select(
+        "NUM_CPF_CNPJ", 
+        "COD_COOP", 
+        F.col("SUBSEGMENTO_NOVO").alias("PORTE_PADRAO")
+    )
+)
+
+df_principalidade_filtrado = (
+    dfs["indicador_principalidade"]
+    .filter(F.col("NUM_ANO_MES") == ultimo_mes_global)
+    .withColumnRenamed("PORTE_PADRAO", "PORTE_PADRAO_REF")  # Renomeia para evitar conflito
+)
+
+# Join que precisa ser removido
+df_base_associados = (
+    df_principalidade_filtrado
+    .join(
+        df_nova_segmentacao_filtrado,
+        on=colunas_chave,
+        how="inner" 
+    )
+    .filter(F.col("PORTE_PADRAO").isin(['PF I', 'PF II', 'PF III', 'PF IV', 'PF V', 'PF VI'])) 
+    .select(colunas_chave + ["PORTE_PADRAO"] + colunas_principalidade)
+)
+```
+
+**Código Migrado (Novo):**
+
+```python
+# Remove a necessidade do join legado
+df_base_associados = (
+    dfs["indicador_principalidade"]
+    .filter(F.col("NUM_ANO_MES") == ultimo_mes_global)
+    .filter(F.col("PORTE_PADRAO").isin(['PF I', 'PF II', 'PF III', 'PF IV', 'PF V', 'PF VI']))
+    .select(colunas_chave + ["PORTE_PADRAO"] + colunas_principalidade)
+)
+df_base_associados.cache()
+total_associados_base = df_base_associados.count()
+```
+
+**Ações Necessárias:**
+
+1. **Remover entrada do dicionário:** Delete a linha `"nova_segmentacao": "sicredi_cas.exp_plan_fin_e_bi.tb_assoc_novo_segmento_2026"` (linha 32)
+2. **Remover entrada de configuração:** Delete a entrada `'nova_segmentacao': {'cols': ['SUBSEGMENTO_NOVO']}` (linhas 73-75)
+3. **Substituir o código:** Troque o bloco de código completo (linhas 98-122) pelo código migrado acima
+4. **Validação:** Verifique se o count de `df_base_associados` permanece consistente após a migração
+
+---
+
 ## Checklist de Manutenção
 
 ### Após Retreino Semestral (Job 3)
@@ -600,6 +666,12 @@ Para alterar a pontuação de um produto para valor fixo:
 - [ ] Promoção do modelo XGBoost para alias `production` no MLflow
 - [ ] Validação das métricas do Grid Search (NDCG, MAP, Hit Rate)
 - [ ] Revisão dos coeficientes de pontuação se houver mudança de regra de negócio
+
+### Migração de Legado (Pendente)
+
+- [ ] Executar migração do join legado (`nova_segmentacao`) conforme item 6 da seção Manutenção
+- [ ] Validar consistência do count de `df_base_associados` antes e depois
+- [ ] Testar pipeline completo após remoção da tabela legada
 
 ### Antes de Alterar Hiperparâmetros
 
