@@ -85,7 +85,7 @@ graph LR
 **Frequência:** Execução diária  
 **Objetivo:** Gerar recomendações personalizadas aplicando regras de negócio e filtros
 
-| Etapa | Notebook | Descrição | Output (Tabela Hive) |
+| Etapa | Notebook | Descrição | Output |
 |-------|----------|-----------|----------------------|
 | 1 | `MatrixFactorization/5.Tabela_Diarizada.py` | Constrói tabela diarizada de produtos contratados pelo cliente | `int_eng_rel.tb_principalidade_diarizada` |
 | 2 | `MatrixFactorization/6.Predict.py` | Aplica pós-processamento: normalização, negativação (remove produtos já contratados), regras de negócio e peso do incremento de principalidade | `int_eng_rel.tb_principalidade_recomendacao_final` |
@@ -99,7 +99,7 @@ graph LR
 **Frequência:** Execução mensal  
 **Objetivo:** Atualizar segmentação de clientes e gerar novas recomendações brutas
 
-| Etapa | Notebook | Descrição | Output (Tabela Hive) |
+| Etapa | Notebook | Descrição | Output |
 |-------|----------|-----------|----------------------|
 | 1 | `Clusterizacao/1.Extração_Segmentacão.py` | Extração de features, tratamento de nulos e criação da ABT (Analytical Base Table) | `int_eng_rel.tb_principalidade_segmentacao_v0` |
 | 2 | `Clusterizacao/3.Predicao_Labels.py` | Predição de labels de cluster usando o Surrogate Model (Decision Tree) | `-` (Update in-place) |
@@ -116,7 +116,7 @@ graph LR
 **Frequência:** Execução semestral  
 **Objetivo:** Retreinar todos os modelos do zero com dados atualizados
 
-| Etapa | Notebook | Descrição | Output (Tabela Hive) |
+| Etapa | Notebook | Descrição | Output |
 |-------|----------|-----------|----------------------|
 | 1 | `Incremento_Principalidade/Percentil.py`<br/>`Incremento_Principalidade/LogNormal.py` | Cálculo do incremento de principalidade: previsão de aporte médio convertido em score | `int_eng_rel.tb_principalidade_produtos_score` |
 | 2 | `Clusterizacao/2.Pipeline_Kmeans.py` | Pipeline completo: KMeans + UMAP + Treinamento do Surrogate Model (XGBoost) para aprender regras dos clusters | `-` (Modelo no MLflow) |
