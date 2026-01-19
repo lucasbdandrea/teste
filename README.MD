@@ -85,10 +85,10 @@ graph LR
 **Frequência:** Execução diária  
 **Objetivo:** Gerar recomendações personalizadas aplicando regras de negócio e filtros
 
-| Etapa | Notebook | Descrição |
-|-------|----------|-----------|
-| 1 | `MatrixFactorization/5.Tabela_Diarizada.py` | Constrói tabela diarizada de produtos contratados pelo cliente |
-| 2 | `MatrixFactorization/6.Predict.py` | Aplica pós-processamento: normalização, negativação (remove produtos já contratados), regras de negócio e peso do incremento de principalidade |
+| Etapa | Notebook | Descrição | Output (Tabela Hive) |
+|-------|----------|-----------|----------------------|
+| 1 | `MatrixFactorization/5.Tabela_Diarizada.py` | Constrói tabela diarizada de produtos contratados pelo cliente | `int_eng_rel.tb_principalidade_diarizada` |
+| 2 | `MatrixFactorization/6.Predict.py` | Aplica pós-processamento: normalização, negativação (remove produtos já contratados), regras de negócio e peso do incremento de principalidade | `int_eng_rel.tb_principalidade_recomendacao_final` |
 
 **Outputs:** Recomendações finais prontas para consumo (diário)
 
@@ -99,13 +99,13 @@ graph LR
 **Frequência:** Execução mensal  
 **Objetivo:** Atualizar segmentação de clientes e gerar novas recomendações brutas
 
-| Etapa | Notebook | Descrição |
-|-------|----------|-----------|
-| 1 | `Clusterizacao/1.Extração_Segmentacão.py` | Extração de features, tratamento de nulos e criação da ABT (Analytical Base Table) |
-| 2 | `Clusterizacao/3.Predicao_Labels.py` | Predição de labels de cluster usando o Surrogate Model (Decision Tree) |
-| 3 | `Clusterizacao/4.Tabela_Acompanhamento.py` | Monitoramento: média e moda das features por cluster para análise de drift |
-| 4 | `MatrixFactorization/3.Extracao_MT_Predict.py` | Extração de dados do mês T para geração de recomendações |
-| 5 | `MatrixFactorization/4.Recomendacao.py` | Geração de recomendações brutas usando hiperparâmetros registrados no MLflow |
+| Etapa | Notebook | Descrição | Output (Tabela Hive) |
+|-------|----------|-----------|----------------------|
+| 1 | `Clusterizacao/1.Extração_Segmentacão.py` | Extração de features, tratamento de nulos e criação da ABT (Analytical Base Table) | `int_eng_rel.tb_principalidade_segmentacao_v0` |
+| 2 | `Clusterizacao/3.Predicao_Labels.py` | Predição de labels de cluster usando o Surrogate Model (Decision Tree) | `-` (Update in-place) |
+| 3 | `Clusterizacao/4.Tabela_Acompanhamento.py` | Monitoramento: média e moda das features por cluster para análise de drift | `int_eng_rel.tb_principalidade_segmentacao_avaliacao` |
+| 4 | `MatrixFactorization/3.Extracao_MT_Predict.py` | Extração de dados do mês T para geração de recomendações | `int_eng_rel.tb_principalidade_produtos_predict` |
+| 5 | `MatrixFactorization/4.Recomendacao.py` | Geração de recomendações brutas usando hiperparâmetros registrados no MLflow | `int_eng_rel.tb_principalidade_recomendacao_bruta` |
 
 **Outputs:** Novas predições de cluster + Recomendações brutas mensais
 
@@ -116,12 +116,12 @@ graph LR
 **Frequência:** Execução semestral  
 **Objetivo:** Retreinar todos os modelos do zero com dados atualizados
 
-| Etapa | Notebook | Descrição |
-|-------|----------|-----------|
-| 1 | `Incremento_Principalidade/Percentil.py`<br/>`Incremento_Principalidade/LogNormal.py` | Cálculo do incremento de principalidade: previsão de aporte médio convertido em score |
-| 2 | `Clusterizacao/2.Pipeline_Kmeans.py` | Pipeline completo: KMeans + UMAP + Treinamento do Surrogate Model (XGBoost) para aprender regras dos clusters |
-| 3 | `MatrixFactorization/1.Extracao_MT_Treino.py` | **Extração crítica:** Dados dos meses T e T-1, remove transições de cluster para criar ground truth limpo |
-| 4 | `MatrixFactorization/2.Treino_MT.py` | Grid Search de hiperparâmetros do ALS por cluster. Métricas: NDCG@K, MAP@K, Hit Rate. Registro no MLflow |
+| Etapa | Notebook | Descrição | Output (Tabela Hive) |
+|-------|----------|-----------|----------------------|
+| 1 | `Incremento_Principalidade/Percentil.py`<br/>`Incremento_Principalidade/LogNormal.py` | Cálculo do incremento de principalidade: previsão de aporte médio convertido em score | `int_eng_rel.tb_principalidade_produtos_score` |
+| 2 | `Clusterizacao/2.Pipeline_Kmeans.py` | Pipeline completo: KMeans + UMAP + Treinamento do Surrogate Model (XGBoost) para aprender regras dos clusters | `-` (Modelo no MLflow) |
+| 3 | `MatrixFactorization/1.Extracao_MT_Treino.py` | **Extração crítica:** Dados dos meses T e T-1, remove transições de cluster para criar ground truth limpo | `int_eng_rel.tb_principalidade_produtos_treino` |
+| 4 | `MatrixFactorization/2.Treino_MT.py` | Grid Search de hiperparâmetros do ALS por cluster. Métricas: NDCG@K, MAP@K, Hit Rate. Registro no MLflow | `-` (Métricas no MLflow) |
 
 **Outputs:** Modelos retreinados + Hiperparâmetros otimizados registrados no MLflow
 
@@ -255,31 +255,6 @@ cross_gt = (cross_seen_te.join(cross_seen_tr, on=['userId', 'itemId'], how='left
 
 ---
 
-### Regras de Negócio (Hardcoded)
-
-**Arquivo:** `MatrixFactorization/6.Predict.py`
-
-O pós-processamento aplica filtros de negócio implementados em código. Estas regras garantem conformidade com políticas comerciais e regulatórias:
-
-**Negativação de Posse:**
-- Remove recomendações de produtos que o cliente já possui (flag = 1 na tabela de perfil)
-- Aplica anti-join com tabela diarizada para excluir produtos contratados recentemente (vlr_transacao >= 1)
-
-**Regras de Cartão de Crédito:**
-- **Hierarquia de Upgrade:** Só recomenda categoria superior à atual (STANDARD < GOLD < PLATINUM < BLACK)
-- **Deduplicação:** Limita a 1 variante de cartão por cliente (mantém maior score × maior rank)
-- **SOW_CARTAO:** Apenas para clientes que já possuem cartão de crédito (PROD_CARTAO_CREDITO = 1)
-
-**Regras de Investimentos (Jornada Progressiva):**
-- **Produto Base:** Se já possui RENDA_FIXA, não recomenda novamente
-- **Produtos Avançados:** Se NÃO possui RENDA_FIXA, bloqueia LCA, LCI e DEPOSITO_A_PRAZO
-
-**Normalização de Score:**
-- Min-Max por cliente e tipo de oferta (cross-sell / up-sell)
-- Se apenas 1 produto disponível, score normalizado = 1.0
-
----
-
 ### Métricas de Avaliação
 
 O sistema utiliza **métricas de ranking** específicas para sistemas de recomendação:
@@ -303,16 +278,35 @@ composite_score = (0.5 × NDCG) + (0.3 × MAP) + (0.2 × Hit Rate)
 
 O módulo `MatrixFactorization/6.Predict.py` aplica refinamentos críticos:
 
-1. **Normalização:** Scores ajustados para escala 0-1 por cluster
-2. **Negativação:** Remove produtos já contratados no dia (anti-join com tabela diarizada)
-3. **Peso de Principalidade:** Multiplica score base pelo incremento de principalidade
-4. **Regras de Negócio:** Filtros customizados 
-5. **Ranking Final:** Ordena por score composto e seleciona Top-K
+**1. Normalização:**
+- Min-Max por cliente e tipo de oferta (cross-sell / up-sell)
+- Se apenas 1 produto disponível, score normalizado = 1.0
+
+**2. Negativação:**
+- Remove recomendações de produtos que o cliente já possui (flag = 1 na tabela de perfil)
+- Aplica anti-join com tabela diarizada para excluir produtos contratados recentemente (vlr_transacao >= 1)
+
+**3. Peso de Principalidade:**
+- Multiplica score base pelo incremento de principalidade
+
+**4. Regras de Negócio:**
+
+**Regras de Cartão de Crédito:**
+- **Hierarquia de Upgrade:** Só recomenda categoria superior à atual (STANDARD < GOLD < PLATINUM < BLACK)
+- **Deduplicação:** Limita a 1 variante de cartão por cliente (mantém maior score × maior rank)
+- **SOW_CARTAO:** Apenas para clientes que já possuem cartão de crédito (PROD_CARTAO_CREDITO = 1)
+
+**Regras de Investimentos (Jornada Progressiva):**
+- **Produto Base:** Se já possui RENDA_FIXA, não recomenda novamente
+- **Produtos Avançados:** Se NÃO possui RENDA_FIXA, bloqueia LCA, LCI e DEPOSITO_A_PRAZO
+
+**5. Ranking Final:**
+- Ordena por score composto e seleciona Top-K
 
 **Fórmula do Score Final:**
 
 ```
-Score_Final = Score_ALS × (1 + Peso_Principalidade) × Multiplicador_Regras
+Score_Final = Score_ALS × Incremento_Principalidade
 ```
 
 ---
