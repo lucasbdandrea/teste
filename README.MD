@@ -180,7 +180,7 @@ graph LR
 
 A segmentação look-alike busca dividir os associados PF em grupos de similaridade baseados em características inerentes, como dados sociodemográficos e atributos qualificadores. O objetivo é criar grupos heterogêneos em nível de engajamento, permitindo que a etapa de recomendação (ALS) encontre os produtos mais adequados para cada perfil.
 
-As variáveis são provenientes da CIA (`sicredi_cas.exp_cia`) e passam por transformações robustas para redução de dimensionalidade focada na preservação de distâncias locais.
+As variáveis são provenientes da CIA (`sicredi_cas.exp_cia`) e passam por transformações para redução de dimensionalidade focada na preservação de distâncias locais.
 
 #### Dicionário de Variáveis
 
@@ -194,10 +194,10 @@ As variáveis são provenientes da CIA (`sicredi_cas.exp_cia`) e passam por tran
 | `PIB_PER_CAPITA` | Numérica | `perfil_sociodemografico` |
 | `TOTAL_VALOR_CARTAO_MERCADO_SCR` | Numérica | `indicador_principalidade` |
 | `VLR_CAPITAL_SOCIAL` | Numérica | `indicador_principalidade` |
-| `SCORE_ONLINE_SUBSCRIPTIONS` | Numérica | `perfil_consumo` (pivoted) |
-| `SCORE_PET_LOVER` | Numérica | `perfil_consumo` (pivoted) |
-| `SCORE_CAR_OWNER` | Numérica | `perfil_consumo` (pivoted) |
-| `SCORE_HOUSE_CARE` | Numérica | `perfil_consumo` (pivoted) |
+| `SCORE_ONLINE_SUBSCRIPTIONS` | Numérica | `perfil_consumo` |
+| `SCORE_PET_LOVER` | Numérica | `perfil_consumo` |
+| `SCORE_CAR_OWNER` | Numérica | `perfil_consumo` |
+| `SCORE_HOUSE_CARE` | Numérica | `perfil_consumo` |
 | `POSSUI_VEICULO_COM_CERTEZA` | Binária | `bens_proprios_veiculos` |
 | `POSSUI_IMOVEL_COM_CERTEZA` | Binária | `bens_proprios_imoveis` |
 | `FLG_EXCLUSIVIDADE_SICREDI` | Binária | `perfil_sociodemografico` |
@@ -221,7 +221,7 @@ O pipeline é implementado via `scikit-learn.ColumnTransformer` com tratamentos 
 | **2. Transformação Logarítmica** | `LogTransformer` (log1p) | Aplicado em: `VLR_RENDA_MENSAL_AJUSTADA`, `MESES_DESDE_ASSOCIACAO`, `NUM_IF_EXT_M12`, `POP_2022`, `PIB_PER_CAPITA`, `TOTAL_VALOR_CARTAO_MERCADO_SCR`, `VLR_CAPITAL_SOCIAL` |
 | **3. Tratamento de Outliers** | `Winsorizer` (99.5º percentil) | Aplicado nas mesmas features de log, exceto `MESES_DESDE_ASSOCIACAO`. Clipping no quantil 0.995 calculado no treino. |
 | **4. Escalonamento** | `StandardScaler` | Aplicado após log/winsorização. Features binárias são incluídas no escalonamento padrão. |
-| **5. Encoding Ordinal** | `OrdinalEncoder` com ordem definida | - `NIVEL_RISCO`: BAIXISSIMO → BAIXO → MEDIO → ALTO → ALTISSIMO → DEFAULT <br>- `BUCKET`: DEFICITARIO → BAIXO → NOVO_ASSOCIADO → MEDIO → ALTO <br>- `PORTE_PADRAO`: PF I → PF II → ... → PF VI <br>- `CAT_ESTAGIO_VIDA`: MENORES → JOVENS ADULTOS → ... → IDOSOS <br>Seguido de `StandardScaler` |
+| **5. Encoding Ordinal** | `OrdinalEncoder` com ordem definida | - `NIVEL_RISCO`, `BUCKET`, `PORTE_PADRAO`, `CAT_ESTAGIO_VIDA` <br>Seguido de `StandardScaler` |
 | **6. Encoding Categórico** | `OneHotEncoder` + `TruncatedSVD` | - One-Hot para `OCUPACAO_GRANDE_GRUPO`, `PERFIL_EXT_M3`, `DES_ESTADO_CIVIL` <br>- Redução de dimensionalidade via SVD para **15 componentes** <br>- Peso aumentado em 1.5× (`CategoricalWeighter`) |
 | **7. Redução de Dimensionalidade** | `UMAP` (n_components=30) | - Parâmetros: `n_neighbors=20`, `min_dist=0.05`, `metric='cosine'` <br>- Preserva estrutura local dos dados (trustworthiness > 0.97) |
 | **8. Clusterização** | `KMeans` (k=8) | - Inicialização: `k-means++` <br>- `n_init=50`, `max_iter=500` <br>- K otimizado via Silhouette Score (Grid Search 2-15) |
