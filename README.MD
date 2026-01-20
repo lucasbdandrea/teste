@@ -85,7 +85,7 @@ graph LR
 **Frequência:** Execução diária  
 **Objetivo:** Gerar recomendações personalizadas aplicando regras de negócio e filtros
 
-| Etapa | Notebook | Descrição | Output |
+| Etapa | Notebook | Descrição | Output (Tabela Hive) |
 |-------|----------|-----------|----------------------|
 | 1 | `MatrixFactorization/5.Tabela_Diarizada.py` | Constrói tabela diarizada de produtos contratados pelo cliente | `int_eng_rel.tb_principalidade_diarizada` |
 | 2 | `MatrixFactorization/6.Predict.py` | Aplica pós-processamento: normalização, negativação (remove produtos já contratados), regras de negócio e peso do incremento de principalidade | `int_eng_rel.tb_principalidade_recomendacao_final` |
@@ -99,7 +99,7 @@ graph LR
 **Frequência:** Execução mensal  
 **Objetivo:** Atualizar segmentação de clientes e gerar novas recomendações brutas
 
-| Etapa | Notebook | Descrição | Output |
+| Etapa | Notebook | Descrição | Output (Tabela Hive) |
 |-------|----------|-----------|----------------------|
 | 1 | `Clusterizacao/1.Extração_Segmentacão.py` | Extração de features, tratamento de nulos e criação da ABT (Analytical Base Table) | `int_eng_rel.tb_principalidade_segmentacao_v0` |
 | 2 | `Clusterizacao/3.Predicao_Labels.py` | Predição de labels de cluster usando o Surrogate Model (Decision Tree) | `-` (Update in-place) |
@@ -116,7 +116,7 @@ graph LR
 **Frequência:** Execução semestral  
 **Objetivo:** Retreinar todos os modelos do zero com dados atualizados
 
-| Etapa | Notebook | Descrição | Output |
+| Etapa | Notebook | Descrição | Output (Tabela Hive) |
 |-------|----------|-----------|----------------------|
 | 1 | `Incremento_Principalidade/Percentil.py`<br/>`Incremento_Principalidade/LogNormal.py` | Cálculo do incremento de principalidade: previsão de aporte médio convertido em score | `int_eng_rel.tb_principalidade_produtos_score` |
 | 2 | `Clusterizacao/2.Pipeline_Kmeans.py` | Pipeline completo: KMeans + UMAP + Treinamento do Surrogate Model (XGBoost) para aprender regras dos clusters | `-` (Modelo no MLflow) |
@@ -173,6 +173,62 @@ graph LR
 ---
 
 ## Detalhes de Implementação
+
+### Engenharia de Features e Pipeline (Clusterização)
+
+#### Contexto Técnico
+
+A segmentação look-alike busca dividir os associados PF em grupos de similaridade baseados em características inerentes, como dados sociodemográficos e atributos qualificadores. O objetivo é criar grupos heterogêneos em nível de engajamento, permitindo que a etapa de recomendação (ALS) encontre os produtos mais adequados para cada perfil.
+
+As variáveis são provenientes da CIA (`sicredi_cas.exp_cia`) e passam por transformações robustas para redução de dimensionalidade focada na preservação de distâncias locais.
+
+#### Dicionário de Variáveis
+
+| Variável | Tipo | Origem (Tabela CIA) |
+|----------|------|---------------------|
+| `VLR_RENDA_MENSAL_AJUSTADA` | Numérica | `perfil_sociodemografico` |
+| `MESES_DESDE_ASSOCIACAO` | Numérica | `indicador_principalidade` |
+| `NUM_IF_EXT_M12` | Numérica | `perfil_if` |
+| `IDH` | Numérica | `perfil_sociodemografico` |
+| `POP_2022` | Numérica | `perfil_sociodemografico` |
+| `PIB_PER_CAPITA` | Numérica | `perfil_sociodemografico` |
+| `TOTAL_VALOR_CARTAO_MERCADO_SCR` | Numérica | `indicador_principalidade` |
+| `VLR_CAPITAL_SOCIAL` | Numérica | `indicador_principalidade` |
+| `SCORE_ONLINE_SUBSCRIPTIONS` | Numérica | `perfil_consumo` (pivoted) |
+| `SCORE_PET_LOVER` | Numérica | `perfil_consumo` (pivoted) |
+| `SCORE_CAR_OWNER` | Numérica | `perfil_consumo` (pivoted) |
+| `SCORE_HOUSE_CARE` | Numérica | `perfil_consumo` (pivoted) |
+| `POSSUI_VEICULO_COM_CERTEZA` | Binária | `bens_proprios_veiculos` |
+| `POSSUI_IMOVEL_COM_CERTEZA` | Binária | `bens_proprios_imoveis` |
+| `FLG_EXCLUSIVIDADE_SICREDI` | Binária | `perfil_sociodemografico` |
+| `OCUPACAO_GRANDE_GRUPO` | Categórica | `perfil_sociodemografico` |
+| `PERFIL_EXT_M3` | Categórica | `perfil_if` |
+| `DES_ESTADO_CIVIL` | Categórica | `perfil_sociodemografico` |
+| `NIVEL_RISCO` | Ordinal | `mod_margem_projetada` |
+| `BUCKET` | Ordinal | `perfil_rentabilizacao` |
+| `PORTE_PADRAO` | Ordinal | `indicador_principalidade` |
+| `CAT_ESTAGIO_VIDA` | Ordinal | `perfil_sociodemografico` |
+
+**Total:** 22 features (12 numéricas, 3 binárias, 3 categóricas, 4 ordinais)
+
+#### Pipeline de Transformação
+
+O pipeline é implementado via `scikit-learn.ColumnTransformer` com tratamentos específicos por tipo de dado:
+
+| Etapa | Método/Técnica | Detalhe Técnico |
+|-------|----------------|-----------------|
+| **1. Tratamento de Nulos** | Imputação por Grupo | - **Numéricos:** Mediana por `PORTE_PADRAO` (renda) ou `COD_COOP` (IDH, POP, PIB) <br>- **Ordinais:** Moda por `PORTE_PADRAO` (`NIVEL_RISCO`, `BUCKET`) <br>- **Categóricos:** Imputação lógica (ex: `PERFIL_EXT_M3 = "SEM_RELAC_EXTERNO"` quando `NUM_IF_EXT_M12 = 0`) |
+| **2. Transformação Logarítmica** | `LogTransformer` (log1p) | Aplicado em: `VLR_RENDA_MENSAL_AJUSTADA`, `MESES_DESDE_ASSOCIACAO`, `NUM_IF_EXT_M12`, `POP_2022`, `PIB_PER_CAPITA`, `TOTAL_VALOR_CARTAO_MERCADO_SCR`, `VLR_CAPITAL_SOCIAL` |
+| **3. Tratamento de Outliers** | `Winsorizer` (99.5º percentil) | Aplicado nas mesmas features de log, exceto `MESES_DESDE_ASSOCIACAO`. Clipping no quantil 0.995 calculado no treino. |
+| **4. Escalonamento** | `StandardScaler` | Aplicado após log/winsorização. Features binárias são incluídas no escalonamento padrão. |
+| **5. Encoding Ordinal** | `OrdinalEncoder` com ordem definida | - `NIVEL_RISCO`: BAIXISSIMO → BAIXO → MEDIO → ALTO → ALTISSIMO → DEFAULT <br>- `BUCKET`: DEFICITARIO → BAIXO → NOVO_ASSOCIADO → MEDIO → ALTO <br>- `PORTE_PADRAO`: PF I → PF II → ... → PF VI <br>- `CAT_ESTAGIO_VIDA`: MENORES → JOVENS ADULTOS → ... → IDOSOS <br>Seguido de `StandardScaler` |
+| **6. Encoding Categórico** | `OneHotEncoder` + `TruncatedSVD` | - One-Hot para `OCUPACAO_GRANDE_GRUPO`, `PERFIL_EXT_M3`, `DES_ESTADO_CIVIL` <br>- Redução de dimensionalidade via SVD para **15 componentes** <br>- Peso aumentado em 1.5× (`CategoricalWeighter`) |
+| **7. Redução de Dimensionalidade** | `UMAP` (n_components=30) | - Parâmetros: `n_neighbors=20`, `min_dist=0.05`, `metric='cosine'` <br>- Preserva estrutura local dos dados (trustworthiness > 0.97) |
+| **8. Clusterização** | `KMeans` (k=8) | - Inicialização: `k-means++` <br>- `n_init=50`, `max_iter=500` <br>- K otimizado via Silhouette Score (Grid Search 2-15) |
+
+**Observação:** Após a clusterização, o Surrogate Model (XGBoost) é treinado usando o pipeline de preprocessamento sem UMAP/KMeans para permitir predições mensais em produção.
+
+---
 
 ### Surrogate Model na Clusterização
 
